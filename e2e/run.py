@@ -36,6 +36,9 @@ USERS = [
     "What are your opening hours?",
 ]
 SCENARIOS = {"pass": "pass", "fail": "fail"}
+# Every client call sends the same x-request-id. The prod gateway must replace
+# it with its own, or calls would share a pairing key and could be mismatched.
+CLIENT_REQUEST_ID = "client-chosen-id"
 
 
 def compose(*args, env=None):
@@ -61,7 +64,8 @@ def call(user):
     body = json.dumps({"model": "current-model-v1", "store": True, "tools": TOOLS,
                        "messages": [{"role": "system", "content": SYSTEM_V1}, {"role": "user", "content": user}]}).encode()
     req = urllib.request.Request(GATEWAY, body, {"content-type": "application/json", "authorization": "Bearer prod-key",
-                                                 "traceparent": f"00-{trace}-{secrets.token_hex(8)}-01"})
+                                                 "traceparent": f"00-{trace}-{secrets.token_hex(8)}-01",
+                                                 "x-request-id": CLIENT_REQUEST_ID})
     t0 = time.time()
     with urllib.request.urlopen(req, timeout=30) as r:
         resp = json.load(r)
@@ -102,6 +106,8 @@ def run_scenario(name, expected):
     ok = True
     ok &= check(v["status"] == expected, f"verdict status is {expected!r} (Argo: {'Successful' if expected == 'pass' else 'Failed'})")
     ok &= check(v["pairs"] == len(latencies), f"every call paired ({v['pairs']}/{len(latencies)})")
+    dups = v.get("metrics", {}).get("duplicate_request_ids", {}).get("value")
+    ok &= check(dups == 0, f"no duplicate request ids although every client sent x-request-id: {CLIENT_REQUEST_ID} (got {dups})")
     ok &= check(served == {"primary"}, "clients only ever saw primary answers")
     ok &= check(p50 < 1.0, f"client p50 {p50*1000:.0f} ms is independent of the 1.5 s candidate")
     return ok

@@ -257,9 +257,15 @@ func (c *Config) Build(reg effect.Classifier) (map[string]*experiment.Analyzer, 
 		if e.Candidate.StripProviderTools() {
 			p = append(p, openai.StripProviderTools{})
 		}
+		allow := openai.AllowFields{}
 		if e.Candidate.DropStatefulFields() {
 			p = append(p, openai.DropStatefulFields{})
+		} else {
+			allow.Extra = []string{"store", "previous_response_id"}
 		}
+		// Last, so it sees the final request: anything not known to be
+		// side-effect free is refused and the shadow copy fails closed.
+		p = append(p, allow)
 		rewrites[e.ID] = extproc.Experiment{Model: e.Candidate.Model, Rewrite: p}
 	}
 	return analyzers, rewrites

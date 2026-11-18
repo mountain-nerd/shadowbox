@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 
 	"github.com/mountain-nerd/shadowbox/internal/observation"
 )
@@ -139,6 +141,36 @@ func (StripProviderTools) Mutate(req map[string]any) error {
 		}
 	}
 	req["tools"] = kept
+	return nil
+}
+
+// AllowFields refuses any top-level request field outside a known-safe
+// allowlist, so the shadow copy fails closed (503) instead of carrying an
+// option that runs something inside the provider or stores state there.
+// Extra adds fields the operator explicitly keeps.
+type AllowFields struct{ Extra []string }
+
+// allowedFields are chat completions request fields that neither execute
+// anything inside the provider nor store state there. Deliberately absent:
+// web_search_options (provider-run web search), store and
+// previous_response_id (provider-side state).
+var allowedFields = map[string]bool{
+	"model": true, "messages": true, "tools": true, "tool_choice": true, "parallel_tool_calls": true,
+	"functions": true, "function_call": true, // legacy function calling
+	"temperature": true, "top_p": true, "n": true, "stop": true, "seed": true,
+	"max_tokens": true, "max_completion_tokens": true, "presence_penalty": true, "frequency_penalty": true,
+	"logit_bias": true, "logprobs": true, "top_logprobs": true, "response_format": true,
+	"reasoning_effort": true, "verbosity": true, "modalities": true, "audio": true, "prediction": true,
+	"stream": true, "stream_options": true, "service_tier": true, "metadata": true,
+	"user": true, "safety_identifier": true, "prompt_cache_key": true,
+}
+
+func (a AllowFields) Mutate(req map[string]any) error {
+	for k := range req {
+		if !allowedFields[k] && !slices.Contains(a.Extra, k) {
+			return fmt.Errorf("field %q is not on the shadow allowlist", k)
+		}
+	}
 	return nil
 }
 

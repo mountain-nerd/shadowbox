@@ -128,6 +128,23 @@ func TestLoad_ExtProcTokenFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestBuild_KeepingStatefulFieldsAllowsThem(t *testing.T) {
+	path := write(t, map[string]string{"shadowbox.yaml": `
+extprocToken: t
+experiments:
+- id: a
+  candidate: {model: m, dropStatefulFields: false}
+`})
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rewrites := c.Build(c.EffectRegistry())
+	if _, err := rewrites["a"].Rewrite.Apply([]byte(`{"model":"v1","messages":[],"store":true}`)); err != nil {
+		t.Fatalf("store refused with dropStatefulFields: false: %v", err)
+	}
+}
+
 func TestBuild_WiresRegistryRewriteAndGate(t *testing.T) {
 	path := write(t, map[string]string{"shadowbox.yaml": full, "prompt.txt": "v2 prompt"})
 	c, err := config.Load(path)
@@ -155,6 +172,10 @@ func TestBuild_WiresRegistryRewriteAndGate(t *testing.T) {
 	if req["model"] != "candidate-model-v2" || req["store"] != nil || len(req["tools"].([]any)) != 0 ||
 		req["messages"].([]any)[0].(map[string]any)["content"] != "v2 prompt" {
 		t.Fatalf("rewritten request = %s", out)
+	}
+
+	if _, err := rw.Rewrite.Apply([]byte(`{"model":"v1","messages":[],"web_search_options":{}}`)); err == nil {
+		t.Fatal("web_search_options passed the rewrite, want the field allowlist to refuse it")
 	}
 
 	a := analyzers["support-v2"]

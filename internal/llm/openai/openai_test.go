@@ -200,6 +200,35 @@ func TestDropStatefulFields(t *testing.T) {
 	}
 }
 
+func TestAllowFields_RejectsFieldsOutsideTheAllowlist(t *testing.T) {
+	// web_search_options makes the provider run a web search inside the call:
+	// a side effect the shadow copy must never have. Any field shadowbox does
+	// not know is refused the same way (fail closed), so new provider options
+	// cannot slip through.
+	for _, field := range []string{"web_search_options", "store", "previous_response_id", "some_future_option"} {
+		body := `{"model":"m","messages":[],"` + field + `":{}}`
+		_, err := (llm.Pipeline{openai.AllowFields{}}).Apply([]byte(body))
+		if err == nil || !strings.Contains(err.Error(), field) {
+			t.Errorf("%s: err = %v, want an error naming the field", field, err)
+		}
+	}
+}
+
+func TestAllowFields_KeepsKnownFieldsUnchanged(t *testing.T) {
+	body := `{"model":"m","messages":[{"role":"user","content":"hi"}],"temperature":0.2,"tools":[],"tool_choice":"auto",
+	 "parallel_tool_calls":true,"max_completion_tokens":100,"response_format":{"type":"json_object"},"seed":1,"user":"u","metadata":{"k":"v"}}`
+	got := applyJSON(t, llm.Pipeline{openai.AllowFields{}}, body)
+	var want map[string]any
+	_ = json.Unmarshal([]byte(body), &want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want the request unchanged", got)
+	}
+}
+
+func TestAllowFields_ExtraWidensTheAllowlist(t *testing.T) {
+	applyJSON(t, llm.Pipeline{openai.AllowFields{Extra: []string{"store"}}}, `{"model":"m","messages":[],"store":true}`)
+}
+
 func TestPipeline_AppliesInOrderAndPreservesUnknownFields(t *testing.T) {
 	m := applyJSON(t, llm.Pipeline{openai.ModelOverride{Model: "a"}, openai.ModelOverride{Model: "b"}}, request)
 	if m["model"] != "b" {

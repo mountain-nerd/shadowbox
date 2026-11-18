@@ -8,6 +8,11 @@
 #     (x-shadowbox-experiment), and shadowbox's shadow handler strips every
 #     request header outside its allowlist, so production credentials never
 #     reach the candidate.
+#   - The gateway must generate x-request-id itself (the pairing key), never
+#     keep a client's: in Envoy, use_remote_address: true,
+#     preserve_external_request_id: false and an internal_address_config
+#     that does not cover your clients. Otherwise shadowbox sees duplicate
+#     ids and holds the verdict at inconclusive.
 #   - Attaching shadowbox as ext_proc in observe mode (observability_mode,
 #     failure_mode_allow) is implementation-specific (e.g. an Envoy Gateway
 #     EnvoyExtensionPolicy or raw Envoy). Check that your implementation exposes

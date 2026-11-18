@@ -3,6 +3,7 @@
 package experiment
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -15,14 +16,19 @@ import (
 // (for example because the observer was down). It is informational.
 const MetricUnpairedShadows = "unpaired_shadows"
 
+// MetricDuplicateRequestIDs counts request ids seen more than once. Any
+// duplicate holds a passing verdict at inconclusive.
+const MetricDuplicateRequestIDs = "duplicate_request_ids"
+
 // Analyzer accumulates one experiment's pairs. It is safe for concurrent use.
 type Analyzer struct {
 	gate analysis.Gate
 
-	mu       sync.Mutex
-	metrics  []analysis.Metric
-	pairs    int
-	unpaired int
+	mu         sync.Mutex
+	metrics    []analysis.Metric
+	pairs      int
+	unpaired   int
+	duplicates int
 }
 
 // NewAnalyzer creates an Analyzer with the given gate and metrics.
@@ -46,7 +52,15 @@ func (a *Analyzer) unpairedShadow() {
 	a.mu.Unlock()
 }
 
-// Verdict evaluates the gate on the current metric results.
+func (a *Analyzer) duplicate() {
+	a.mu.Lock()
+	a.duplicates++
+	a.mu.Unlock()
+}
+
+// Verdict evaluates the gate on the current metric results. Duplicate
+// request ids mean pairs may be mismatched, so they hold a pass at
+// inconclusive; a fail stands.
 func (a *Analyzer) Verdict() analysis.Verdict {
 	a.mu.Lock()
 	results := make(map[string]analysis.Result, len(a.metrics)+1)
@@ -54,9 +68,15 @@ func (a *Analyzer) Verdict() analysis.Verdict {
 		results[m.Name()] = m.Result()
 	}
 	results[MetricUnpairedShadows] = analysis.Result{Value: float64(a.unpaired), Samples: a.pairs + a.unpaired}
-	pairs := a.pairs
+	results[MetricDuplicateRequestIDs] = analysis.Result{Value: float64(a.duplicates), Samples: a.pairs + a.unpaired + a.duplicates}
+	pairs, duplicates := a.pairs, a.duplicates
 	a.mu.Unlock()
-	return a.gate.Evaluate(pairs, results)
+	v := a.gate.Evaluate(pairs, results)
+	if duplicates > 0 && v.Status == analysis.Pass {
+		v.Status = analysis.Inconclusive
+		v.Reasons = append(v.Reasons, fmt.Sprintf("%s = %d: pairs may be mismatched, so the gateway must generate x-request-id itself", MetricDuplicateRequestIDs, duplicates))
+	}
+	return v
 }
 
 // Stats counts observations that did not reach an analyzer.
@@ -104,6 +124,18 @@ func (r *Registry) OnUnpaired(o observation.Observation) {
 		return
 	}
 	r.unknown.Add(1)
+}
+
+// OnDuplicate implements pairing.Sink. A shadow names its experiment; a
+// primary does not, so a duplicate primary taints every experiment.
+func (r *Registry) OnDuplicate(o observation.Observation) {
+	if a, ok := r.analyzers[o.Experiment]; ok && o.Role == observation.Shadow {
+		a.duplicate()
+		return
+	}
+	for _, a := range r.analyzers {
+		a.duplicate()
+	}
 }
 
 // Verdict returns the verdict for an experiment.

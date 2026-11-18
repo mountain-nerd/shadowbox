@@ -19,9 +19,10 @@ func (c *fakeClock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock();
 func (c *fakeClock) Advance(d time.Duration) { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
 
 type recordingSink struct {
-	mu       sync.Mutex
-	pairs    []observation.Pair
-	unpaired []observation.Observation
+	mu         sync.Mutex
+	pairs      []observation.Pair
+	unpaired   []observation.Observation
+	duplicates []observation.Observation
 }
 
 func (s *recordingSink) OnPair(p observation.Pair) {
@@ -32,6 +33,11 @@ func (s *recordingSink) OnPair(p observation.Pair) {
 func (s *recordingSink) OnUnpaired(o observation.Observation) {
 	s.mu.Lock()
 	s.unpaired = append(s.unpaired, o)
+	s.mu.Unlock()
+}
+func (s *recordingSink) OnDuplicate(o observation.Observation) {
+	s.mu.Lock()
+	s.duplicates = append(s.duplicates, o)
 	s.mu.Unlock()
 }
 
@@ -179,11 +185,72 @@ func TestDuplicateSameRoleIsDroppedAndFirstStillPairs(t *testing.T) {
 	p.Add(dup)
 	p.Add(shadow("r1", "exp-a"))
 
-	if st := p.Stats(); st.Dropped != 1 {
-		t.Fatalf("Dropped = %d, want 1", st.Dropped)
+	if st := p.Stats(); st.Duplicates != 1 || st.Dropped != 0 {
+		t.Fatalf("Stats = %+v, want Duplicates=1 Dropped=0", st)
+	}
+	if len(sink.duplicates) != 1 || sink.duplicates[0].Model != "dup" {
+		t.Fatalf("duplicates = %+v, want the second primary reported", sink.duplicates)
 	}
 	if len(sink.pairs) != 1 || sink.pairs[0].Primary.Model != "first" {
 		t.Fatalf("pairs = %+v, want the first primary paired", sink.pairs)
+	}
+}
+
+// A client that reuses an x-request-id could get a candidate answer paired
+// with the wrong primary. Ids that already paired are remembered for the TTL,
+// so a reuse is reported instead of forming a second, possibly mismatched pair.
+func TestRequestIDReusedAfterPairingIsADuplicate(t *testing.T) {
+	sink := &recordingSink{}
+	p := newPairer(sink, &fakeClock{now: time.Unix(0, 0)}, 100)
+
+	p.Add(primary("r1"))
+	p.Add(shadow("r1", "exp-a"))
+	p.Add(primary("r1"))
+	p.Add(shadow("r1", "exp-a"))
+
+	if len(sink.pairs) != 1 {
+		t.Fatalf("pairs = %d, want 1 (the reuse must not pair)", len(sink.pairs))
+	}
+	if len(sink.duplicates) != 2 {
+		t.Fatalf("duplicates = %d, want 2", len(sink.duplicates))
+	}
+	if st := p.Stats(); st.Duplicates != 2 || st.Pending != 0 {
+		t.Fatalf("Stats = %+v, want Duplicates=2 Pending=0", st)
+	}
+}
+
+func TestRequestIDMayBeReusedAfterTheTTL(t *testing.T) {
+	sink := &recordingSink{}
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	p := newPairer(sink, clock, 100)
+
+	p.Add(primary("r1"))
+	p.Add(shadow("r1", "exp-a"))
+	clock.Advance(31 * time.Second)
+	p.Add(primary("r1"))
+	p.Add(shadow("r1", "exp-a"))
+
+	if len(sink.pairs) != 2 || len(sink.duplicates) != 0 {
+		t.Fatalf("pairs = %d, duplicates = %d, want 2 and 0", len(sink.pairs), len(sink.duplicates))
+	}
+}
+
+func TestRememberedRequestIDsAreBounded(t *testing.T) {
+	sink := &recordingSink{}
+	p := newPairer(sink, &fakeClock{now: time.Unix(0, 0)}, 2)
+
+	for _, id := range []string{"r1", "r2", "r3"} {
+		p.Add(primary(id))
+		p.Add(shadow(id, "exp-a"))
+	}
+	p.Add(primary("r3")) // still remembered
+	p.Add(primary("r1")) // forgotten: only the newest MaxPending ids are kept
+
+	if len(sink.duplicates) != 1 || sink.duplicates[0].RequestID != "r3" {
+		t.Fatalf("duplicates = %+v, want only r3", sink.duplicates)
+	}
+	if st := p.Stats(); st.Pending != 1 {
+		t.Fatalf("Pending = %d, want 1 (r1 waits as a new primary)", st.Pending)
 	}
 }
 
@@ -207,8 +274,9 @@ func TestSinkMayCallBackIntoPairer(t *testing.T) {
 
 type callbackSink struct{ onPair func() }
 
-func (s *callbackSink) OnPair(observation.Pair)            { s.onPair() }
-func (s *callbackSink) OnUnpaired(observation.Observation) {}
+func (s *callbackSink) OnPair(observation.Pair)             { s.onPair() }
+func (s *callbackSink) OnUnpaired(observation.Observation)  {}
+func (s *callbackSink) OnDuplicate(observation.Observation) {}
 
 func TestConcurrentAddsPairEverything(t *testing.T) {
 	sink := &recordingSink{}

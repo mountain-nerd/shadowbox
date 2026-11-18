@@ -4,7 +4,11 @@
 // mirrored copy). The pending set is bounded and every entry has a TTL, so a
 // burst of unsampled primaries cannot grow memory without limit. Nothing is
 // dropped silently: expired and evicted observations are reported to the
-// Sink, and malformed or duplicate ones are counted.
+// Sink, malformed ones are counted, and duplicates are reported to the Sink.
+//
+// Ids that already paired are remembered for the TTL (at most MaxPending of
+// them), so a reused x-request-id is reported as a duplicate instead of
+// forming a second, possibly mismatched pair.
 package pairing
 
 import (
@@ -27,6 +31,9 @@ func (systemClock) Now() time.Time { return time.Now() }
 type Sink interface {
 	OnPair(observation.Pair)
 	OnUnpaired(observation.Observation)
+	// OnDuplicate reports an observation whose request id was already
+	// pending or recently paired for the same role. It is not paired.
+	OnDuplicate(observation.Observation)
 }
 
 // Options configures a Pairer.
@@ -41,7 +48,7 @@ type Options struct {
 
 // Stats counts pairing outcomes since the Pairer was created.
 type Stats struct {
-	Pending, Paired, Expired, Evicted, Dropped int64
+	Pending, Paired, Expired, Evicted, Dropped, Duplicates int64
 }
 
 type entry struct {
@@ -55,6 +62,11 @@ type key struct {
 	role observation.Role
 }
 
+type seenEntry struct {
+	id    string
+	added time.Time
+}
+
 // Pairer joins observations. It is safe for concurrent use.
 type Pairer struct {
 	sink Sink
@@ -63,6 +75,8 @@ type Pairer struct {
 	mu      sync.Mutex
 	pending map[key]*entry
 	order   *list.List // of key, oldest first
+	seen    map[string]*list.Element
+	seenAge *list.List // of seenEntry: recently paired ids, oldest first
 	stats   Stats
 }
 
@@ -77,13 +91,15 @@ func New(sink Sink, opts Options) *Pairer {
 	if opts.TTL <= 0 {
 		opts.TTL = 30 * time.Second
 	}
-	return &Pairer{sink: sink, opts: opts, pending: map[key]*entry{}, order: list.New()}
+	return &Pairer{sink: sink, opts: opts, pending: map[key]*entry{}, order: list.New(),
+		seen: map[string]*list.Element{}, seenAge: list.New()}
 }
 
 // events collects sink notifications so they can be sent after unlocking.
 type events struct {
-	pairs    []observation.Pair
-	unpaired []observation.Observation
+	pairs      []observation.Pair
+	unpaired   []observation.Observation
+	duplicates []observation.Observation
 }
 
 // Add offers an observation for pairing.
@@ -120,13 +136,17 @@ func (p *Pairer) addLocked(o observation.Observation, ev *events) {
 		return
 	}
 	self := key{o.RequestID, o.Role}
-	if _, dup := p.pending[self]; dup {
-		p.stats.Dropped++
+	_, pendingDup := p.pending[self]
+	_, pairedBefore := p.seen[o.RequestID]
+	if pendingDup || pairedBefore {
+		p.stats.Duplicates++
+		ev.duplicates = append(ev.duplicates, o)
 		return
 	}
 	other := key{o.RequestID, counterpart(o.Role)}
 	if match, ok := p.pending[other]; ok {
 		p.removeLocked(other, match)
+		p.rememberLocked(o.RequestID)
 		p.stats.Paired++
 		ev.pairs = append(ev.pairs, makePair(o, match.obs))
 		return
@@ -143,8 +163,22 @@ func (p *Pairer) addLocked(o observation.Observation, ev *events) {
 	p.pending[self] = e
 }
 
+// rememberLocked records a paired id for the TTL, keeping at most MaxPending.
+func (p *Pairer) rememberLocked(id string) {
+	if p.seenAge.Len() >= p.opts.MaxPending {
+		oldest := p.seenAge.Front()
+		delete(p.seen, oldest.Value.(seenEntry).id)
+		p.seenAge.Remove(oldest)
+	}
+	p.seen[id] = p.seenAge.PushBack(seenEntry{id: id, added: p.opts.Clock.Now()})
+}
+
 func (p *Pairer) expireLocked(ev *events) {
 	cutoff := p.opts.Clock.Now().Add(-p.opts.TTL)
+	for front := p.seenAge.Front(); front != nil && !front.Value.(seenEntry).added.After(cutoff); front = p.seenAge.Front() {
+		delete(p.seen, front.Value.(seenEntry).id)
+		p.seenAge.Remove(front)
+	}
 	for front := p.order.Front(); front != nil; front = p.order.Front() {
 		k := front.Value.(key)
 		e := p.pending[k]
@@ -168,6 +202,9 @@ func (p *Pairer) dispatch(ev events) {
 	}
 	for _, o := range ev.unpaired {
 		p.sink.OnUnpaired(o)
+	}
+	for _, o := range ev.duplicates {
+		p.sink.OnDuplicate(o)
 	}
 }
 

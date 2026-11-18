@@ -1,6 +1,7 @@
 package experiment_test
 
 import (
+	"strings"
 	"sync"
 	"testing"
 
@@ -103,6 +104,58 @@ func TestRegistry_UnpairedShadowIsReportedOnItsExperiment(t *testing.T) {
 	}
 	if got := r.Stats().UnsampledPrimaries; got != 1 {
 		t.Fatalf("UnsampledPrimaries = %d, want 1", got)
+	}
+}
+
+func agreeing(a *experiment.Analyzer, exp string) {
+	for i := 0; i < 3; i++ {
+		a.Observe(toolPair(exp, "lookup_order", "lookup_order"))
+	}
+}
+
+// A duplicate request id means pairs may be mismatched, so the experiment
+// must not pass on them.
+func TestRegistry_DuplicateRequestIDHoldsAPassAtInconclusive(t *testing.T) {
+	a := newAnalyzer()
+	agreeing(a, "a")
+	r := experiment.NewRegistry(map[string]*experiment.Analyzer{"a": a})
+
+	r.OnDuplicate(observation.Observation{Role: observation.Shadow, Experiment: "a", RequestID: "r1"})
+
+	v, _ := r.Verdict("a")
+	if v.Status != analysis.Inconclusive || !strings.Contains(strings.Join(v.Reasons, ";"), "duplicate") {
+		t.Fatalf("Verdict = %s %v, want inconclusive naming the duplicates", v.Status, v.Reasons)
+	}
+	if got := v.Metrics[experiment.MetricDuplicateRequestIDs]; got.Value != 1 {
+		t.Fatalf("%s = %+v, want 1", experiment.MetricDuplicateRequestIDs, got)
+	}
+}
+
+// A primary carries no experiment id, so a duplicate one taints every experiment.
+func TestRegistry_DuplicatePrimaryTaintsEveryExperiment(t *testing.T) {
+	a, b := newAnalyzer(), newAnalyzer()
+	agreeing(a, "a")
+	agreeing(b, "b")
+	r := experiment.NewRegistry(map[string]*experiment.Analyzer{"a": a, "b": b})
+
+	r.OnDuplicate(observation.Observation{Role: observation.Primary, RequestID: "r1"})
+
+	for _, id := range []string{"a", "b"} {
+		if v, _ := r.Verdict(id); v.Status != analysis.Inconclusive {
+			t.Errorf("%s: Verdict = %s, want inconclusive", id, v.Status)
+		}
+	}
+}
+
+func TestRegistry_DuplicateDoesNotHideAFailure(t *testing.T) {
+	a := newAnalyzer()
+	a.Observe(toolPair("a", "lookup_order", "issue_refund"))
+	r := experiment.NewRegistry(map[string]*experiment.Analyzer{"a": a})
+
+	r.OnDuplicate(observation.Observation{Role: observation.Shadow, Experiment: "a", RequestID: "r1"})
+
+	if v, _ := r.Verdict("a"); v.Status != analysis.Fail {
+		t.Fatalf("Verdict = %s, want fail to stand", v.Status)
 	}
 }
 

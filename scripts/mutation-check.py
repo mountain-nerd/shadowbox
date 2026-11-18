@@ -27,6 +27,25 @@ M = [
      "./internal/extproc", "TestShadow_ForwardsOnlyAllowlistedHeaders"),
     ("internal/pairing/pairing.go", "\tp.addLocked(o, &ev)\n\tp.mu.Unlock()\n\tp.dispatch(ev)",
      "\tp.addLocked(o, &ev)\n\tp.dispatch(ev)\n\tp.mu.Unlock()", "./internal/pairing", "TestSinkMayCallBackIntoPairer"),
+    # Shadow request field allowlist (fail closed on unknown fields).
+    ("internal/llm/openai/openai.go", "if !allowedFields[k] && !slices.Contains(a.Extra, k) {",
+     "if false && !allowedFields[k] && !slices.Contains(a.Extra, k) {", "./internal/llm/openai", "TestAllowFields_RejectsFieldsOutsideTheAllowlist"),
+    ("internal/config/config.go", "p = append(p, allow)", "_ = allow", "./internal/config", "TestBuild_WiresRegistryRewriteAndGate"),
+    ("internal/config/config.go", 'allow.Extra = []string{"store", "previous_response_id"}', "_ = allow",
+     "./internal/config", "TestBuild_KeepingStatefulFieldsAllowsThem"),
+    # Duplicate request ids: detected after pairing, forgotten after the TTL, bounded, and holding a pass.
+    ("internal/pairing/pairing.go", "if pendingDup || pairedBefore {", "if pendingDup || (false && pairedBefore) {",
+     "./internal/pairing", "TestRequestIDReusedAfterPairingIsADuplicate"),
+    ("internal/pairing/pairing.go", "front != nil && !front.Value.(seenEntry).added.After(cutoff);", "front != nil && false;",
+     "./internal/pairing", "TestRequestIDMayBeReusedAfterTheTTL"),
+    ("internal/pairing/pairing.go", "if p.seenAge.Len() >= p.opts.MaxPending {", "if false {",
+     "./internal/pairing", "TestRememberedRequestIDsAreBounded"),
+    ("internal/experiment/experiment.go", "if duplicates > 0 && v.Status == analysis.Pass {", "if false && duplicates > 0 && v.Status == analysis.Pass {",
+     "./internal/experiment", "TestRegistry_DuplicateRequestIDHoldsAPassAtInconclusive"),
+    ("internal/experiment/experiment.go", "if duplicates > 0 && v.Status == analysis.Pass {", "if duplicates > 0 {",
+     "./internal/experiment", "TestRegistry_DuplicateDoesNotHideAFailure"),
+    ("internal/experiment/experiment.go", "for _, a := range r.analyzers {\n\t\ta.duplicate()", "for _, a := range r.analyzers {\n\t\t_ = a",
+     "./internal/experiment", "TestRegistry_DuplicatePrimaryTaintsEveryExperiment"),
 ]
 
 def gotest(pkg, run):

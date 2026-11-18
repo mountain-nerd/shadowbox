@@ -71,6 +71,7 @@ func NewHandler(s Sources) (http.Handler, func(context.Context) error, error) {
 		o.ObserveInt64(unpaired, ps.Expired, reason("expired"))
 		o.ObserveInt64(unpaired, ps.Evicted, reason("evicted"))
 		o.ObserveInt64(unpaired, ps.Dropped, reason("dropped"))
+		o.ObserveInt64(unpaired, ps.Duplicates, reason("duplicate"))
 		rs := s.Registry.Stats()
 		o.ObserveInt64(unpaired, rs.UnsampledPrimaries, reason("unsampled_primary"))
 		o.ObserveInt64(unpaired, rs.UnknownExperiment, reason("unknown_experiment"))

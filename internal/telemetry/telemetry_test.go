@@ -30,7 +30,9 @@ func (fakeRegistry) Stats() experiment.Stats {
 func scrape(t *testing.T) string {
 	t.Helper()
 	h, shutdown, err := telemetry.NewHandler(telemetry.Sources{
-		Pairing:  func() pairing.Stats { return pairing.Stats{Pending: 3, Paired: 18, Expired: 4, Evicted: 1, Dropped: 2} },
+		Pairing: func() pairing.Stats {
+			return pairing.Stats{Pending: 3, Paired: 18, Expired: 4, Evicted: 1, Dropped: 2, Duplicates: 7}
+		},
 		Registry: fakeRegistry{},
 		Shadow:   func() extproc.Stats { return extproc.Stats{Rejected: 5, RewriteFailures: 6} },
 	})
@@ -77,6 +79,7 @@ func TestMetricsExposePairingVerdictAndShadowCounters(t *testing.T) {
 		{"shadowbox_unpaired_total", []string{`reason="expired"`}, "4"},
 		{"shadowbox_unpaired_total", []string{`reason="evicted"`}, "1"},
 		{"shadowbox_unpaired_total", []string{`reason="dropped"`}, "2"},
+		{"shadowbox_unpaired_total", []string{`reason="duplicate"`}, "7"},
 		{"shadowbox_unpaired_total", []string{`reason="unsampled_primary"`}, "40"},
 		{"shadowbox_unpaired_total", []string{`reason="unknown_experiment"`}, "2"},
 		{"shadowbox_shadow_rejected_total", []string{`reason="unknown_experiment"`}, "5"},
