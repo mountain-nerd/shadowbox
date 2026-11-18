@@ -1,0 +1,74 @@
+# shadowbox as a single Deployment: gRPC :9000 (Envoy ext_proc, both roles)
+# and HTTP :8080 (verdict for Argo Rollouts, ingest, /metrics, /healthz).
+# State is in memory (pairs and metrics per experiment), so run ONE replica per
+# set of experiments; a restart resets the verdict to inconclusive (never pass).
+apiVersion: v1
+kind: Namespace
+metadata: { name: shadowbox }
+---
+# Shared secret every Envoy ext_proc stream must present (gRPC metadata
+# x-shadowbox-token, set in the gateways' grpc_service.initial_metadata).
+# Generate your own; prefer mTLS between the gateways and shadowbox as well.
+apiVersion: v1
+kind: Secret
+metadata: { name: shadowbox, namespace: shadowbox }
+type: Opaque
+stringData:
+  extproc-token: REPLACE-WITH-A-RANDOM-SECRET
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: shadowbox, namespace: shadowbox }
+data:
+  shadowbox.yaml: |
+    tools:
+      lookup_order: read-only
+      issue_refund: irreversible
+    mcp:
+      servers:
+      - url: http://support-tools.agents.svc:8080/mcp
+        trusted: false          # annotations may only tighten the registry
+    experiments:
+    - id: support-v2
+      candidate:
+        model: candidate-model-v2
+        systemPromptFile: /etc/shadowbox/prompts/support-v2.txt
+  support-v2.txt: |
+    You are a concise customer-support agent. Always look up the order before acting.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: shadowbox, namespace: shadowbox }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: shadowbox } }
+  template:
+    metadata: { labels: { app: shadowbox } }
+    spec:
+      containers:
+      - name: shadowbox
+        image: shadowbox:dev   # placeholder: build with `docker build -t shadowbox:dev .`
+        args: ["-config", "/etc/shadowbox/shadowbox.yaml"]
+        env:
+        - name: SHADOWBOX_EXTPROC_TOKEN
+          valueFrom: { secretKeyRef: { name: shadowbox, key: extproc-token } }
+        ports:
+        - { name: http, containerPort: 8080 }
+        - { name: grpc, containerPort: 9000 }
+        readinessProbe: { httpGet: { path: /healthz, port: http } }
+        securityContext: { runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false }
+        volumeMounts:
+        - { name: config, mountPath: /etc/shadowbox/shadowbox.yaml, subPath: shadowbox.yaml }
+        - { name: config, mountPath: /etc/shadowbox/prompts/support-v2.txt, subPath: support-v2.txt }
+      volumes:
+      - name: config
+        configMap: { name: shadowbox }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: shadowbox, namespace: shadowbox }
+spec:
+  selector: { app: shadowbox }
+  ports:
+  - { name: http, port: 8080, targetPort: http }
+  - { name: grpc, port: 9000, targetPort: grpc, appProtocol: kubernetes.io/h2c }

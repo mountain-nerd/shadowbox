@@ -1,0 +1,7 @@
+name: probe
+services:
+  primary: { image: python:3.14-slim, command: ["python","-u","/m.py"], environment: { NAME: primary, DELAY_S: "0.1" }, volumes: ["./mock.py:/m.py:ro","./logs:/logs"] }
+  candidate: { image: python:3.14-slim, command: ["python","-u","/m.py"], environment: { NAME: candidate }, volumes: ["./mock.py:/m.py:ro","./logs:/logs"] }
+  probe: { build: ./srv }
+  shadowgw: { image: envoyproxy/envoy:v1.40.2, command: ["envoy","-c","/e.json","--log-level","warn"], volumes: ["./shadow.json:/e.json:ro"], depends_on: [candidate, probe] }
+  prod: { image: envoyproxy/envoy:v1.40.2, command: ["envoy","-c","/e.json","--log-level","warn"], volumes: ["./prod.json:/e.json:ro"], ports: ["10000:10000","9901:9901"], depends_on: [primary, shadowgw, probe] }

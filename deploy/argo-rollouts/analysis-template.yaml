@@ -1,0 +1,33 @@
+# Argo Rollouts gate on shadowbox's verdict, using the standard web metric provider.
+#
+# Contract (see internal/httpapi): GET .../verdict returns {"status": "pass"|"fail"|"inconclusive", ...}.
+#   result == "pass"  -> measurement Successful
+#   result == "fail"  -> measurement Failed (failureLimit 0: the analysis fails, the rollout aborts)
+#   anything else     -> measurement Inconclusive (more than inconclusiveLimit pauses the rollout)
+#
+# NOT validated against a running Argo Rollouts controller; field names and
+# defaults were checked against argo-rollouts pkg/apis/rollouts/v1alpha1/analysis_types.go.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: shadowbox-verdict
+spec:
+  args:
+  - name: experiment            # shadowbox experiment id, one per candidate prompt/model
+  - name: shadowbox-url
+    value: http://shadowbox.shadowbox.svc.cluster.local:8080
+  metrics:
+  - name: shadowbox-verdict
+    initialDelay: 2m            # let shadow traffic accumulate pairs
+    interval: 2m
+    count: 5
+    failureLimit: 0             # any "fail" stops the rollout
+    inconclusiveLimit: 3        # early "not enough pairs" is tolerated a few times, then pause
+    consecutiveErrorLimit: 2    # shadowbox unreachable => error, never a silent pass
+    successCondition: result == "pass"
+    failureCondition: result == "fail"
+    provider:
+      web:
+        url: "{{args.shadowbox-url}}/v1/experiments/{{args.experiment}}/verdict"
+        jsonPath: "{$.status}"
+        timeoutSeconds: 5

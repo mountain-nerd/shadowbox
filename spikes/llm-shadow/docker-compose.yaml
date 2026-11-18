@@ -1,0 +1,36 @@
+name: llm-shadow-spike
+
+services:
+  primary-llm:
+    image: python:3.14-slim
+    command: ["python", "-u", "/app/server.py"]
+    environment: { NAME: primary, DELAY_S: "0.2" }
+    volumes: ["./mock_llm:/app:ro", "./logs:/logs"]
+
+  candidate-llm:
+    image: python:3.14-slim
+    command: ["python", "-u", "/app/server.py"]
+    # Deliberately slow and flaky: the client must not notice either.
+    environment: { NAME: candidate, DELAY_S: "1.5", ERROR_RATE: "0.2" }
+    volumes: ["./mock_llm:/app:ro", "./logs:/logs"]
+
+  prompt-swap:
+    build: ./prompt_swap
+    environment:
+      CANDIDATE_MODEL: candidate-model-v2
+      CANDIDATE_PROMPT_FILE: /prompts/support-v2.txt
+    volumes: ["./prompts:/prompts:ro"]
+
+  shadow-gateway:
+    image: envoyproxy/envoy:v1.40.2
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes: ["./envoy/shadow-gateway.yaml:/etc/envoy/envoy.yaml:ro"]
+    ports: ["9902:9902"]
+    depends_on: [candidate-llm, prompt-swap]
+
+  prod-gateway:
+    image: envoyproxy/envoy:v1.40.2
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes: ["./envoy/prod-gateway.yaml:/etc/envoy/envoy.yaml:ro"]
+    ports: ["10000:10000", "9901:9901"]
+    depends_on: [primary-llm, shadow-gateway]

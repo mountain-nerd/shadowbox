@@ -1,0 +1,74 @@
+# Live gateway: serves the current model, mirrors to the shadow gateway, and
+# lets shadowbox observe the primary's response without waiting for it.
+admin:
+  address: { socket_address: { address: 0.0.0.0, port_value: 9901 } }
+static_resources:
+  listeners:
+  - name: llm
+    address: { socket_address: { address: 0.0.0.0, port_value: 10000 } }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: prod
+          route_config:
+            virtual_hosts:
+            - name: llm
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/v1/chat/completions" }
+                route:
+                  cluster: primary_llm
+                  timeout: 30s
+                  request_mirror_policies:
+                  - cluster: shadow_gateway
+                    runtime_fraction:
+                      default_value: { numerator: 100, denominator: HUNDRED }
+                      runtime_key: shadow.llm_percent
+                    request_headers_mutations:
+                    - append:
+                        header: { key: x-shadowbox-experiment, value: support-v2 }
+                        append_action: OVERWRITE_IF_EXISTS_OR_ADD
+                    - remove: authorization
+          http_filters:
+          - name: envoy.filters.http.ext_proc
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+              grpc_service:
+                envoy_grpc: { cluster_name: shadowbox }
+                initial_metadata:
+                - { key: x-shadowbox-token, value: e2e-stream-secret }   # shared secret; use mTLS or a mounted secret in production
+                - { key: x-shadowbox-role, value: observe }
+              observability_mode: true    # send and go: never delays the user
+              failure_mode_allow: true    # shadowbox down => live traffic unaffected
+              processing_mode:
+                request_header_mode: SEND
+                request_body_mode: NONE
+                response_header_mode: SEND
+                response_body_mode: STREAMED
+                request_trailer_mode: SKIP
+                response_trailer_mode: SKIP
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: primary_llm
+    type: STRICT_DNS
+    load_assignment:
+      cluster_name: primary_llm
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: primary-llm, port_value: 8080 } } } }] }]
+  - name: shadow_gateway
+    type: STRICT_DNS
+    load_assignment:
+      cluster_name: shadow_gateway
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: shadow-gateway, port_value: 10001 } } } }] }]
+  - name: shadowbox
+    type: STRICT_DNS
+    typed_extension_protocol_options:
+      envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+        "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+        explicit_http_config: { http2_protocol_options: {} }
+    load_assignment:
+      cluster_name: shadowbox
+      endpoints: [{ lb_endpoints: [{ endpoint: { address: { socket_address: { address: shadowbox, port_value: 9000 } } } }] }]

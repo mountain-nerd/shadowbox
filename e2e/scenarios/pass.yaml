@@ -1,0 +1,10 @@
+# Candidate changes tone only. Expected verdict: pass.
+extprocToken: e2e-stream-secret
+tools:
+  lookup_order: read-only
+  issue_refund: irreversible
+experiments:
+- id: support-v2
+  candidate:
+    model: candidate-model-v2
+    systemPrompt: "You are a concise customer-support agent. Always look up the order before acting."

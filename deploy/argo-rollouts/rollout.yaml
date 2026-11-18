@@ -1,0 +1,45 @@
+# Example: an agent whose prompt/model version is rolled out with Argo Rollouts.
+#
+# Flow:
+#   1. The new version is configured in shadowbox as experiment "support-v2"
+#      (candidate model + system prompt) and shadowed at the LLM-call level,
+#      so users see no change and the candidate executes nothing.
+#   2. Before any real traffic shifts, the analysis step gates on the verdict.
+#   3. Only then does the canary take real traffic.
+#
+# Why there is no background analysis on this experiment: once canary pods
+# serve users, their LLM calls go through the same prod gateway and are
+# mirrored too, so the experiment would start pairing v2-vs-v2 calls and
+# report inflated agreement. Disable the mirror (or move to a new experiment
+# id) before shifting weight, and use ordinary canary metrics from then on.
+#
+# NOT validated against a running Argo Rollouts controller.
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: support-agent
+spec:
+  replicas: 4
+  selector:
+    matchLabels: { app: support-agent }
+  template:
+    metadata:
+      labels: { app: support-agent }
+    spec:
+      containers:
+      - name: agent
+        image: registry.example.com/support-agent:2.0.0   # reads PROMPT_VERSION / MODEL from env
+        env:
+        - { name: PROMPT_VERSION, value: v2 }
+        - { name: MODEL, value: candidate-model-v2 }
+        - { name: LLM_BASE_URL, value: http://llm-gateway.agents.svc:10000 }   # the prod gateway
+  strategy:
+    canary:
+      steps:
+      - analysis:                  # gate on shadow results before any user sees v2
+          templates: [{ templateName: shadowbox-verdict }]
+          args: [{ name: experiment, value: support-v2 }]
+      - setWeight: 10
+      - pause: { duration: 30m }
+      - setWeight: 50
+      - pause: { duration: 30m }

@@ -1,0 +1,6 @@
+spikes/
+docs/
+e2e/
+deploy/
+*.md
+.git

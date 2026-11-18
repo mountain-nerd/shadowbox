@@ -1,0 +1,35 @@
+# Portable form of the prod-side mirror (Gateway API, standard channel).
+# Conformance reports list HTTPRouteRequestMirror and HTTPRouteRequestPercentageMirror
+# for Cilium v1.20.0, Envoy Gateway v1.9.0, Istio 1.31 and agentgateway v1.7.0.
+#
+# Differences from the raw Envoy config in e2e/envoy/prod-gateway.yaml:
+#   - Gateway API cannot add or remove headers on the mirrored copy only, so the
+#     experiment id comes from the shadow gateway's ext_proc gRPC metadata
+#     (x-shadowbox-experiment), and shadowbox's shadow handler strips every
+#     request header outside its allowlist, so production credentials never
+#     reach the candidate.
+#   - Attaching shadowbox as ext_proc in observe mode (observability_mode,
+#     failure_mode_allow) is implementation-specific (e.g. an Envoy Gateway
+#     EnvoyExtensionPolicy or raw Envoy). Check that your implementation exposes
+#     those two settings before relying on the live-path guarantees.
+#
+# NOT run on a Gateway API controller; the e2e test uses the same Envoy data plane directly.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-prod
+  namespace: agents
+spec:
+  parentRefs:
+  - name: llm-gateway
+  rules:
+  - matches:
+    - path: { type: PathPrefix, value: /v1/chat/completions }
+    filters:
+    - type: RequestMirror
+      requestMirror:
+        backendRef: { name: shadow-llm-gateway, port: 10001 }
+        percent: 10
+    backendRefs:
+    - name: llm-primary
+      port: 443

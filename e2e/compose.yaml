@@ -1,0 +1,34 @@
+name: shadowbox-e2e
+
+services:
+  primary-llm:
+    image: python:3.14-slim
+    command: ["python", "-u", "/app/server.py"]
+    environment: { NAME: primary, DELAY_S: "0.2" }
+    volumes: ["./mock_llm:/app:ro", "./logs:/logs"]
+
+  candidate-llm:
+    image: python:3.14-slim
+    command: ["python", "-u", "/app/server.py"]
+    # Deliberately slow: the client must not notice.
+    environment: { NAME: candidate, DELAY_S: "1.5" }
+    volumes: ["./mock_llm:/app:ro", "./logs:/logs"]
+
+  shadowbox:
+    image: shadowbox:dev
+    command: ["-config", "/etc/shadowbox/shadowbox.yaml"]
+    volumes: ["./scenarios/${SCENARIO:-pass}.yaml:/etc/shadowbox/shadowbox.yaml:ro"]
+    ports: ["18080:8080"]
+
+  shadow-gateway:
+    image: envoyproxy/envoy:v1.40.2
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes: ["./envoy/shadow-gateway.yaml:/etc/envoy/envoy.yaml:ro"]
+    depends_on: [candidate-llm, shadowbox]
+
+  prod-gateway:
+    image: envoyproxy/envoy:v1.40.2
+    command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--log-level", "warn"]
+    volumes: ["./envoy/prod-gateway.yaml:/etc/envoy/envoy.yaml:ro"]
+    ports: ["18000:10000"]
+    depends_on: [primary-llm, shadow-gateway, shadowbox]

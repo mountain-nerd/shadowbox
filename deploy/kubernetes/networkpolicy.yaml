@@ -1,0 +1,23 @@
+# shadowbox's gRPC port (ext_proc) is protected only by a shared token, and its
+# HTTP port serves verdicts. Only the gateways may reach :9000; only Argo Rollouts and
+# your Prometheus may reach :8080. Ingest (POST /v1/observations) additionally
+# needs a bearer token and is disabled without one.
+#
+# Adjust the namespace/pod selectors to your gateway, Argo and Prometheus deployments.
+# NOT validated against a cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shadowbox
+  namespace: shadowbox
+spec:
+  podSelector: { matchLabels: { app: shadowbox } }
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: llm-gateways } }
+    ports: [{ port: 9000, protocol: TCP }]
+  - from:
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: argo-rollouts } }
+    - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } }
+    ports: [{ port: 8080, protocol: TCP }]
