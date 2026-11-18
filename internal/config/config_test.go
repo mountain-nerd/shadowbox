@@ -115,6 +115,25 @@ func TestLoad_RequiresExtProcToken(t *testing.T) {
 	}
 }
 
+func TestLoad_RejectsPlaceholderTokens(t *testing.T) {
+	cases := map[string]struct{ file, extprocEnv, ingestEnv string }{
+		"extproc in file":  {file: "extprocToken: REPLACE-WITH-A-RANDOM-SECRET\n"},
+		"extproc from env": {extprocEnv: "REPLACE-WITH-A-RANDOM-SECRET"},
+		"ingest in file":   {file: "extprocToken: t\ningestToken: replace-with-a-random-secret\n"},
+		"ingest from env":  {file: "extprocToken: t\n", ingestEnv: "REPLACE-WITH-A-RANDOM-SECRET"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("SHADOWBOX_EXTPROC_TOKEN", tc.extprocEnv)
+			t.Setenv("SHADOWBOX_INGEST_TOKEN", tc.ingestEnv)
+			path := write(t, map[string]string{"shadowbox.yaml": tc.file + "experiments:\n- id: a\n  candidate: {model: m}"})
+			if _, err := config.Load(path); err == nil {
+				t.Fatal("Load succeeded with the example manifest's placeholder token, want error (it is public, so anyone could present it)")
+			}
+		})
+	}
+}
+
 func TestLoad_ExtProcTokenFromEnvironment(t *testing.T) {
 	t.Setenv("SHADOWBOX_EXTPROC_TOKEN", "from-env")
 	path := write(t, map[string]string{"shadowbox.yaml": "experiments:\n- id: a\n  candidate: {model: m}"})

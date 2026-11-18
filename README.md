@@ -42,7 +42,7 @@ The gate returns `pass`, `fail` or `inconclusive`. **It never passes without dat
 - **Tool proposals are read from every place a model can make them:** every choice, including the legacy `function_call` form. An error status always counts as an error *(unit tests)*.
 - **The role comes from operator config,** through gRPC `initial_metadata`, never from a client-settable header *(unit tests)*.
 - **Clients can't choose the pairing key.** The prod gateway sets `use_remote_address: true`, `preserve_external_request_id: false` and a loopback-only `internal_address_config`, so Envoy replaces any client-sent `x-request-id` with its own. *e2e:* every client call sent the same `x-request-id`, and all 24 still paired correctly with 0 duplicates. An empty `cidr_ranges` would fall back to treating RFC1918 addresses as internal, and Envoy would keep the client's id. As a backstop, shadowbox remembers recently paired ids. If an id shows up again, it is not paired, it is counted as `duplicate_request_ids`, and a `pass` is held at `inconclusive` (a `fail` stands). A duplicate primary taints every experiment *(unit tests; the e2e with the gateway setting removed reached `inconclusive` with 46 duplicates)*.
-- **Nobody can talk the gate into passing.** Every `ext_proc` stream must present the shared `extprocToken`, sent by Envoy as gRPC metadata `x-shadowbox-token`. It is **required**, and shadowbox won't start without it. Ingest (`POST /v1/observations`) is **disabled unless `ingestToken` is set**. Also restrict both ports with the [NetworkPolicy](deploy/kubernetes/networkpolicy.yaml), and prefer mTLS between the gateways and shadowbox in production *(unit tests and e2e; NetworkPolicy and mTLS not validated on a cluster)*.
+- **Nobody can talk the gate into passing.** Every `ext_proc` stream must present the shared `extprocToken`, sent by Envoy as gRPC metadata `x-shadowbox-token`. It is **required**, and shadowbox won't start without it or with the example manifest's `REPLACE-WITH-…` placeholder. Ingest (`POST /v1/observations`) is **disabled unless `ingestToken` is set**. Also restrict both ports with the [NetworkPolicy](deploy/kubernetes/networkpolicy.yaml), and prefer mTLS between the gateways and shadowbox in production *(unit tests and e2e; NetworkPolicy and mTLS not validated on a cluster)*.
 - **No prompt text or tool arguments are stored.** Arguments are compared by SHA-256 of canonical JSON. Metric labels are bounded to experiment, metric, status and reason *(unit tests)*.
 - **Bounded memory, nothing dropped silently.** The pairing store has a TTL and a capacity cap. Expired, evicted, duplicate, unsampled and unknown-experiment observations are counted. Remembered pair ids are capped at `maxPending` and kept only for the TTL *(unit tests, `-race`)*.
 
@@ -69,7 +69,7 @@ In both scenarios clients only received primary answers, and client latency (p50
 
 A third step stops shadowbox and checks that live traffic is unaffected and the candidate gets nothing. The e2e publishes host ports 18000 (prod gateway) and 18080 (shadowbox).
 
-`make mutation` applies 24 targeted production-code mutations and requires the matching test to fail for each. It currently catches 24 of 24.
+`make mutation` applies 26 targeted production-code mutations and requires the matching test to fail for each. It currently catches 26 of 26.
 
 ## Build
 
@@ -173,6 +173,8 @@ Issues and pull requests are welcome. Please:
 - write the failing test first, then the code
 - run `make check` (tests with `-race`, `go vet`, `gofmt`) before opening a PR
 - run `make e2e` if you touch `extproc`, `app` or the Envoy configs
+
+Please report security issues privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
 
 Good first areas are in [Not yet verified or not built](#not-yet-verified-or-not-built): SSE streaming, other response formats and running it on a real cluster.
 

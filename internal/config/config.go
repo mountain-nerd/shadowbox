@@ -157,6 +157,11 @@ func Load(path string) (*Config, error) {
 	if c.ExtProcToken == "" {
 		return nil, errors.New("config: extprocToken (or SHADOWBOX_EXTPROC_TOKEN) is required: every Envoy ext_proc stream must present it")
 	}
+	for name, tok := range map[string]string{"extprocToken": c.ExtProcToken, "ingestToken": c.IngestToken} {
+		if isPlaceholder(tok) {
+			return nil, fmt.Errorf("config: %s is still the example placeholder; generate a random secret", name)
+		}
+	}
 	if r.Pairing.TTL != "" {
 		if c.Pairing.TTL, err = time.ParseDuration(r.Pairing.TTL); err != nil || c.Pairing.TTL <= 0 {
 			return nil, fmt.Errorf("config: pairing.ttl %q is not a positive duration", r.Pairing.TTL)
@@ -269,6 +274,12 @@ func (c *Config) Build(reg effect.Classifier) (map[string]*experiment.Analyzer, 
 		rewrites[e.ID] = extproc.Experiment{Model: e.Candidate.Model, Rewrite: p}
 	}
 	return analyzers, rewrites
+}
+
+// isPlaceholder reports whether tok is the example manifests' placeholder,
+// which is public and so no secret at all.
+func isPlaceholder(tok string) bool {
+	return strings.HasPrefix(strings.ToUpper(tok), "REPLACE-WITH")
 }
 
 func or(v, def string) string {

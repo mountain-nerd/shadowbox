@@ -46,6 +46,11 @@ M = [
      "./internal/experiment", "TestRegistry_DuplicateDoesNotHideAFailure"),
     ("internal/experiment/experiment.go", "for _, a := range r.analyzers {\n\t\ta.duplicate()", "for _, a := range r.analyzers {\n\t\t_ = a",
      "./internal/experiment", "TestRegistry_DuplicatePrimaryTaintsEveryExperiment"),
+    # The example manifests' public placeholder token is refused.
+    ("internal/config/config.go", "if isPlaceholder(tok) {", "if false && isPlaceholder(tok) {",
+     "./internal/config", "TestLoad_RejectsPlaceholderTokens"),
+    ('internal/config/config.go', 'strings.HasPrefix(strings.ToUpper(tok), "REPLACE-WITH")', 'strings.HasPrefix(tok, "REPLACE-WITH")',
+     "./internal/config", "TestLoad_RejectsPlaceholderTokens"),
 ]
 
 def gotest(pkg, run):
